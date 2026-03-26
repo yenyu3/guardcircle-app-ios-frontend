@@ -28,7 +28,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const json = await res.json();
   if (path === "/analysis") console.log("[API] ← /analysis", res.status, json);
   if (path === "/uploads/presign") console.log("[API] ← /uploads/presign", res.status, json);
-  if (!res.ok) throw new ApiError(res.status, json.error ?? "Unknown error");
+  // 503/202 on /analysis are handled by retry logic in store, not treated as errors
+  if (!res.ok && !(path === "/analysis" && (res.status === 503 || res.status === 202))) {
+    throw new ApiError(res.status, json.error ?? "Unknown error");
+  }
   return json as T;
 }
 

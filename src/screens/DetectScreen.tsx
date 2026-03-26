@@ -300,7 +300,7 @@ export default function DetectScreen() {
     });
     if (!result.canceled) {
       const newItems: Attachment[] = result.assets.map((a) => ({
-        type: a.mimeType?.startsWith("video") ? "video" : "file",
+        type: a.mimeType?.startsWith("video") ? "video" : a.mimeType?.startsWith("audio") ? "audio" : "file",
         uri: a.uri,
         name: a.name,
       }));

@@ -38,6 +38,7 @@ export default function AnalyzingScreen() {
   const glowOpacity = useRef(new Animated.Value(0.3)).current;
 
   useEffect(() => {
+    console.log('[Analyzing] params:', { type, types, input, hasImageUri: !!imageUri, hasAttachmentUri: !!attachmentUri, attachmentName, mimeType });
     Animated.loop(
       Animated.timing(spin, {
         toValue: 1,

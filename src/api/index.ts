@@ -157,7 +157,7 @@ export interface AnalysisRes {
 }
 
 export const analyze = (body: AnalysisReq) =>
-  api.post<AnalysisRes>('/analysis', body);
+  api.post<AnalysisRes & { data?: AnalysisRes['data']; error?: string }>('/analysis', body);
 
 // ── 5.12 取得檔案預簽名網址 (S3 Presign) ────────────────────
 

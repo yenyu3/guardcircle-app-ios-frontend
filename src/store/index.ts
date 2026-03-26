@@ -355,6 +355,8 @@ export const useAppStore = create<AppState>((set) => ({
     const types = Array.isArray(input_type) ? input_type : [input_type];
     const needsS3 = types.some((t) => t === 'video' || t === 'audio' || t === 'file');
 
+    console.log('[apiAnalyze] entry:', { types, needsS3, hasAttachmentUri: !!attachmentUri, fileName, mimeType });
+
     let s3Key: string | undefined;
     let resolvedExt = file_ext;
     if (needsS3 && attachmentUri && fileName) {
@@ -395,20 +397,29 @@ export const useAppStore = create<AppState>((set) => ({
 
     // 3. 呼叫分析 API，遇 503/202 則 retry（video 最多 5 分鐘）
     const MAX_WAIT_MS = 5 * 60 * 1000;
-    const INITIAL_DELAY_MS = needsS3 ? 30_000 : 0;
+    const INITIAL_DELAY_MS = needsS3 ? 10_000 : 0;
     const RETRY_INTERVAL_MS = 10_000;
-    const startTime = Date.now();
 
     if (INITIAL_DELAY_MS > 0) {
       await new Promise((r) => setTimeout(r, INITIAL_DELAY_MS));
     }
 
+    const startTime = Date.now();
     let isPoll = false;
     while (true) {
-      const res = await API.analyze({ ...payload, ...(isPoll && { poll: true }) });
-      console.log('[Analysis] response message:', res.message);
-      if (res.message !== 'Analysis still in progress, please retry') {
-        return res.data;
+      try {
+        const res = await API.analyze({ ...payload, ...(isPoll && { poll: true }) });
+        console.log('[Analysis] response message:', res.message, 'error:', res.error);
+        const stillInProgress =
+          res.message === 'Service Unavailable' ||
+          !!(res.error ?? '').toLowerCase().includes('in progress') ||
+          !res.data;
+        if (!stillInProgress) {
+          return res.data!;
+        }
+      } catch (e) {
+        // network error 也當作 in-progress 處理，繼續 retry
+        console.log('[Analysis] fetch error, will retry:', e);
       }
       if (Date.now() - startTime >= MAX_WAIT_MS) throw new Error('Analysis timed out');
       isPoll = true;
