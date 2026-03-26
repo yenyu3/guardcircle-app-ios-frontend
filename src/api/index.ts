@@ -93,8 +93,10 @@ export interface FamilyScanEvent {
   event_id: string;
   user_id: string;
   user_nickname: string;
-  input_type: 'text' | 'image' | 'url' | 'phone';
+  input_type: string; // JSON 字串如 "[\"video\"]" 或 "[\"text\",\"phone\"]"
   input_content: string;
+  s3_key?: string;
+  media_url?: string;
   risk_level: BackendRiskLevel;
   risk_score: number;
   scam_type: string;
@@ -104,6 +106,8 @@ export interface FamilyScanEvent {
   risk_factors: string[];
   top_signals: string[];
   notify_status: string;
+  updated_by?: string;
+  updated_at?: string;
   created_at: string;
 }
 
@@ -188,6 +192,8 @@ export interface GetUserEventRes {
     user_id: string;
     input_type: string;
     input_content: string;
+    s3_key?: string;
+    media_url?: string;
     risk_level: BackendRiskLevel;
     risk_score: number;
     scam_type: string;
@@ -198,6 +204,8 @@ export interface GetUserEventRes {
     top_signals: string[];
     raw_result?: Record<string, unknown>;
     notify_status: string;
+    updated_by?: string;
+    updated_at?: string;
     created_at: string;
   };
 }

@@ -320,12 +320,23 @@ export const useAppStore = create<AppState>((set) => ({
       lastActive: m.last_event ? formatDate(m.last_event.created_at) : '',
     }));
     const events: import('../types').DetectEvent[] = allEvents.map((e) => {
+      // input_type 後端回傳 JSON 字串如 "[\"video\"]"，解析取第一個
+      let parsedType: import('../types').DetectType = 'text';
+      try {
+        const arr = JSON.parse(e.input_type);
+        if (Array.isArray(arr) && arr.length > 0) parsedType = arr[0] as import('../types').DetectType;
+      } catch {
+        parsedType = e.input_type as import('../types').DetectType;
+      }
+      // media_url 含 \u0026 編碼，decodeURIComponent 轉換
+      const mediaUrl = e.media_url ? decodeURIComponent(e.media_url.replace(/\\u0026/g, '&')) : undefined;
       return {
         id: e.event_id,
         userId: e.user_id,
         userNickname: e.user_nickname,
-        type: e.input_type,
+        type: parsedType,
         input: e.input_content,
+        attachmentUri: mediaUrl,
         riskLevel: API.mapRiskLevel(e.risk_level),
         riskScore: e.risk_score,
         scamType: e.scam_type,
