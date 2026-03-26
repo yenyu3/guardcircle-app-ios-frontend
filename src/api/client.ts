@@ -18,12 +18,16 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     const payload = JSON.parse(options.body as string);
     console.log("[API] → /analysis payload:", JSON.stringify(payload, null, 2));
   }
+  if (path === "/uploads/presign" && options?.body) {
+    console.log("[API] → /uploads/presign payload:", options.body);
+  }
   const res = await fetch(`${BASE_URL}${path}`, {
     headers: { "Content-Type": "application/json", ...options?.headers },
     ...options,
   });
   const json = await res.json();
   if (path === "/analysis") console.log("[API] ← /analysis", res.status, json);
+  if (path === "/uploads/presign") console.log("[API] ← /uploads/presign", res.status, json);
   if (!res.ok) throw new ApiError(res.status, json.error ?? "Unknown error");
   return json as T;
 }
@@ -34,4 +38,6 @@ export const api = {
     request<T>(path, { method: "POST", body: JSON.stringify(body) }),
   patch: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
+  putRaw: (url: string, body: Blob | ArrayBuffer, headers?: Record<string, string>) =>
+    fetch(url, { method: "PUT", body, headers }),
 };

@@ -63,7 +63,7 @@ export type RootStackParamList = {
   FamilyJoin: undefined;
   Main: undefined;
   Settings: undefined;
-  Analyzing: { type: string; types?: string[]; input: string; imageUri?: string; attachmentUri?: string };
+  Analyzing: { type: string; types?: string[]; input: string; imageUri?: string; attachmentUri?: string; attachmentName?: string; mimeType?: string };
   Result: {
     riskLevel: "safe" | "medium" | "high";
     scamType: string;
@@ -85,6 +85,7 @@ export type RootStackParamList = {
     attachmentUri?: string;
   };
   ResultMedium: {
+    eventId?: string;
     scamType: string;
     riskScore: number;
     riskFactors: string[];

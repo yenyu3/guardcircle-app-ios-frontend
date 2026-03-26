@@ -128,10 +128,12 @@ export const getFamilyScanEvents = (
 
 export interface AnalysisReq {
   user_id: string;
-  input_type: ('text' | 'image' | 'url' | 'phone')[];
+  input_type: ('text' | 'image' | 'url' | 'phone' | 'video' | 'audio' | 'file')[];
   input_content: string;
+  s3_key?: string;
   file_ext?: string;
   region?: string;
+  poll?: boolean;
 }
 
 export interface AnalysisRes {
@@ -156,6 +158,27 @@ export interface AnalysisRes {
 
 export const analyze = (body: AnalysisReq) =>
   api.post<AnalysisRes>('/analysis', body);
+
+// ── 5.12 取得檔案預簽名網址 (S3 Presign) ────────────────────
+
+export interface PresignReq {
+  file_name: string;
+  content_type: string;
+  file_size: number;
+  purpose: 'analysis';
+}
+
+export interface PresignRes {
+  upload_url: string;
+  object_key: string;
+  bucket: string;
+  expires_in: number;
+  method: 'PUT';
+  headers: Record<string, string>;
+}
+
+export const presignUpload = (body: PresignReq) =>
+  api.post<PresignRes>('/uploads/presign', body);
 
 // ── 5.7 查詢單筆事件詳情 ─────────────────────────────────────
 

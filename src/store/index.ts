@@ -63,7 +63,7 @@ interface AppState {
   stopFamilyPolling: () => void;
   _pollingTimer: ReturnType<typeof setInterval> | null;
   // 真實 API 分析
-  apiAnalyze: (params: { input_type: 'text' | 'image' | 'url' | 'phone' | ('text' | 'image' | 'url' | 'phone')[]; content: string; file_ext?: string }) => Promise<API.AnalysisRes['data']>;
+  apiAnalyze: (params: { input_type: 'text' | 'image' | 'url' | 'phone' | 'video' | 'audio' | 'file' | ('text' | 'image' | 'url' | 'phone' | 'video' | 'audio' | 'file')[]; content: string; file_ext?: string; attachmentUri?: string; mimeType?: string; fileName?: string }) => Promise<API.AnalysisRes['data']>;
   // 真實 API 更新個人資料
   apiPatchUser: (body: API.PatchUserReq) => Promise<void>;
   logout: () => void;
@@ -335,10 +335,11 @@ export const useAppStore = create<AppState>((set) => ({
         riskFactors: e.risk_factors ?? [],
         topSignals: e.top_signals ?? [],
         createdAt: formatDate(e.created_at),
-        // notify_status 'sent' 或 'not_required' 代表已被處理 → safe
         status: (e.notify_status === 'sent' || e.notify_status === 'not_required')
           ? 'safe'
           : e.risk_level === 'high' ? 'high_risk' : e.risk_level === 'medium' ? 'pending' : 'safe',
+        gatekeeperResponse: e.updated_by || undefined,
+        gatekeeperResponseAt: e.updated_at ? formatDate(e.updated_at) : undefined,
       };
     });
     set((s) => ({
@@ -347,11 +348,72 @@ export const useAppStore = create<AppState>((set) => ({
     }));
   },
 
-  apiAnalyze: async ({ input_type, content, file_ext }) => {
+  apiAnalyze: async ({ input_type, content, file_ext, attachmentUri, mimeType, fileName }) => {
     const { userId } = useAppStore.getState();
     if (!userId) throw new Error('not logged in');
-    const res = await API.analyze({ user_id: userId, input_type: Array.isArray(input_type) ? input_type : [input_type], input_content: content, file_ext });
-    return res.data;
+
+    const types = Array.isArray(input_type) ? input_type : [input_type];
+    const needsS3 = types.some((t) => t === 'video' || t === 'audio' || t === 'file');
+
+    let s3Key: string | undefined;
+    let resolvedExt = file_ext;
+    if (needsS3 && attachmentUri && fileName) {
+      resolvedExt = fileName.split('.').pop()?.toLowerCase() ?? file_ext ?? '';
+      const resolvedMime = mimeType ?? 'application/octet-stream';
+
+      console.log('[S3] presign request:', { fileName, resolvedMime, resolvedExt, attachmentUri });
+
+      // 1. 取得 presign URL
+      const presign = await API.presignUpload({
+        file_name: fileName,
+        content_type: resolvedMime,
+        file_size: 0,
+        purpose: 'analysis',
+      });
+      console.log('[S3] presign response:', presign);
+
+      // 2. 上傳檔案到 S3（直接用 fetch PUT，不走 API Gateway）
+      const uploadRes = await fetch(presign.upload_url, {
+        method: 'PUT',
+        headers: { 'Content-Type': resolvedMime },
+        body: await (await fetch(attachmentUri)).blob(),
+      });
+      console.log('[S3] upload status:', uploadRes.status);
+      if (!uploadRes.ok) throw new Error(`S3 upload failed: ${uploadRes.status}`);
+      s3Key = presign.object_key;
+    }
+
+    const payload: API.AnalysisReq = {
+      user_id: userId,
+      input_type: types as API.AnalysisReq['input_type'],
+      input_content: s3Key ? 'presigned' : content,
+      ...(s3Key && { s3_key: s3Key }),
+      ...(resolvedExt && { file_ext: resolvedExt }),
+    };
+
+    console.log('[Analysis] payload:', payload);
+
+    // 3. 呼叫分析 API，遇 503/202 則 retry（video 最多 5 分鐘）
+    const MAX_WAIT_MS = 5 * 60 * 1000;
+    const INITIAL_DELAY_MS = needsS3 ? 30_000 : 0;
+    const RETRY_INTERVAL_MS = 10_000;
+    const startTime = Date.now();
+
+    if (INITIAL_DELAY_MS > 0) {
+      await new Promise((r) => setTimeout(r, INITIAL_DELAY_MS));
+    }
+
+    let isPoll = false;
+    while (true) {
+      const res = await API.analyze({ ...payload, ...(isPoll && { poll: true }) });
+      console.log('[Analysis] response message:', res.message);
+      if (res.message !== 'Analysis still in progress, please retry') {
+        return res.data;
+      }
+      if (Date.now() - startTime >= MAX_WAIT_MS) throw new Error('Analysis timed out');
+      isPoll = true;
+      await new Promise((r) => setTimeout(r, RETRY_INTERVAL_MS));
+    }
   },
 
   apiPatchUser: async (body) => {
