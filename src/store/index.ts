@@ -58,6 +58,10 @@ interface AppState {
   apiJoinFamily: (inviteCode: string) => Promise<void>;
   // 真實 API 拉取家庭圈成員
   apiFetchFamily: () => Promise<void>;
+  // Polling
+  startFamilyPolling: () => void;
+  stopFamilyPolling: () => void;
+  _pollingTimer: ReturnType<typeof setInterval> | null;
   // 真實 API 分析
   apiAnalyze: (params: { input_type: 'text' | 'image' | 'url' | 'phone' | ('text' | 'image' | 'url' | 'phone')[]; content: string; file_ext?: string }) => Promise<API.AnalysisRes['data']>;
   // 真實 API 更新個人資料
@@ -70,7 +74,7 @@ interface AppState {
     status: EventStatus,
     extra?: Partial<DetectEvent>,
   ) => void;
-  resolveEvent: (eventId: string, gatekeeperResponse: string) => void;
+  resolveEvent: (eventId: string, gatekeeperResponse: string) => Promise<void>;
   setMemberStatus: (
     userId: string,
     status: "safe" | "pending" | "high_risk",
@@ -126,6 +130,7 @@ export const useAppStore = create<AppState>((set) => ({
   registeredAccounts: [],
   userId: null,
   familyId: null,
+  _pollingTimer: null,
 
   setRole: (role) => set((s) => ({ currentUser: { ...s.currentUser, role } })),
 
@@ -231,9 +236,11 @@ export const useAppStore = create<AppState>((set) => ({
       hasFamilyCircle: !!d.family_id,
       currentUser: { ...s.currentUser, id: d.user_id, nickname: d.nickname, phone, role },
     }));
-    // 補抓完整個人資料
+    // 補抓完整個人資料 + 家庭圈資料（並行）
     try {
-      const userRes = await API.getUser(d.user_id);
+      const fetches: Promise<unknown>[] = [API.getUser(d.user_id)];
+      if (d.family_id) fetches.push(useAppStore.getState().apiFetchFamily());
+      const [userRes] = await Promise.all(fetches) as [Awaited<ReturnType<typeof API.getUser>>, ...unknown[]];
       const u = userRes.data;
       const g = u.gender as 'male' | 'female' | 'other' | undefined;
       const [by, bm, bd] = u.birthday ? u.birthday.split('-') : [];
@@ -286,10 +293,21 @@ export const useAppStore = create<AppState>((set) => ({
   apiFetchFamily: async () => {
     const { familyId } = useAppStore.getState();
     if (!familyId) return;
-    const [feedRes, scanRes] = await Promise.all([
-      API.getFamilyFeed(familyId),
-      API.getFamilyScanEvents(familyId),
-    ]);
+
+    // 分頁全量拉取所有揃描事件
+    const PAGE = 100;
+    let offset = 0;
+    let allEvents: API.FamilyScanEvent[] = [];
+    let familyName = '';
+    while (true) {
+      const res = await API.getFamilyScanEvents(familyId, { limit: PAGE, offset });
+      familyName = res.family_name;
+      allEvents = allEvents.concat(res.events);
+      if (res.events.length < PAGE) break;
+      offset += PAGE;
+    }
+
+    const feedRes = await API.getFamilyFeed(familyId);
 
     const members: import('../types').FamilyMember[] = feedRes.members_status.map((m) => ({
       id: m.user_id,
@@ -301,10 +319,7 @@ export const useAppStore = create<AppState>((set) => ({
         : 'safe',
       lastActive: m.last_event ? formatDate(m.last_event.created_at) : '',
     }));
-    const events: import('../types').DetectEvent[] = scanRes.events.map((e) => {
-      const existing = useAppStore.getState().events.find((ev) => ev.id === e.event_id);
-      // 若本地已 resolve，保留本地狀態不被後端覆蓋
-      if (existing?.resolvedAt) return existing;
+    const events: import('../types').DetectEvent[] = allEvents.map((e) => {
       return {
         id: e.event_id,
         userId: e.user_id,
@@ -320,11 +335,14 @@ export const useAppStore = create<AppState>((set) => ({
         riskFactors: e.risk_factors ?? [],
         topSignals: e.top_signals ?? [],
         createdAt: formatDate(e.created_at),
-        status: e.risk_level === 'high' ? 'high_risk' : e.risk_level === 'medium' ? 'pending' : 'safe',
+        // notify_status 'sent' 或 'not_required' 代表已被處理 → safe
+        status: (e.notify_status === 'sent' || e.notify_status === 'not_required')
+          ? 'safe'
+          : e.risk_level === 'high' ? 'high_risk' : e.risk_level === 'medium' ? 'pending' : 'safe',
       };
     });
     set((s) => ({
-      family: { ...s.family, id: familyId, name: scanRes.family_name || s.family.name, members },
+      family: { ...s.family, id: familyId, name: familyName || s.family.name, members },
       events,
     }));
   },
@@ -353,7 +371,34 @@ export const useAppStore = create<AppState>((set) => ({
     }));
   },
 
-  logout: () => set({ isLoggedIn: false, hasFamilyCircle: false, userId: null, familyId: null }),
+  startFamilyPolling: () => {
+    const state = useAppStore.getState();
+    if (state._pollingTimer || !state.familyId) return;
+    const timer = setInterval(() => {
+      useAppStore.getState().apiFetchFamily().catch(() => {});
+    }, 30_000);
+    set({ _pollingTimer: timer });
+  },
+
+  stopFamilyPolling: () => {
+    const { _pollingTimer } = useAppStore.getState();
+    if (_pollingTimer) clearInterval(_pollingTimer);
+    set({ _pollingTimer: null });
+  },
+
+  logout: () => {
+    const { _pollingTimer } = useAppStore.getState();
+    if (_pollingTimer) clearInterval(_pollingTimer);
+    set({
+      isLoggedIn: false,
+      hasFamilyCircle: false,
+      userId: null,
+      familyId: null,
+      _pollingTimer: null,
+      events: [],
+      family: { id: '', name: '', code: '', members: [], createdAt: '' },
+    });
+  },
 
   joinFamily: () => set({ hasFamilyCircle: true }),
 
@@ -369,30 +414,33 @@ export const useAppStore = create<AppState>((set) => ({
       ),
     })),
 
-  resolveEvent: (eventId, gatekeeperResponse) => {
+  resolveEvent: async (eventId, gatekeeperResponse) => {
     const now = formatDate(new Date().toISOString());
+    const { currentUser, events } = useAppStore.getState();
+    // 先更新本地，讓 UI 即時反映
     set((s) => {
       const targetEvent = s.events.find((e) => e.id === eventId);
       const updatedMembers = targetEvent
         ? s.family.members.map((m) =>
-            m.id === targetEvent.userId ? { ...m, status: "safe" as const } : m,
+            m.id === targetEvent.userId ? { ...m, status: 'safe' as const } : m,
           )
         : s.family.members;
       return {
         events: s.events.map((e) =>
           e.id === eventId
-            ? {
-                ...e,
-                status: "safe",
-                resolvedAt: now,
-                gatekeeperResponse,
-                gatekeeperResponseAt: now,
-              }
+            ? { ...e, status: 'safe', resolvedAt: now, gatekeeperResponse, gatekeeperResponseAt: now }
             : e,
         ),
         family: { ...s.family, members: updatedMembers },
       };
     });
+    // 寫回後端，讓其他守門人的 polling 能同步到
+    try {
+      await API.patchNotifyStatus(eventId, {
+        notify_status: 'sent',
+        updated_by: currentUser.nickname,
+      });
+    } catch {}
   },
 
   setMemberStatus: (userId, status) =>

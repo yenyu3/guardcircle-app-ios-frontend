@@ -200,6 +200,21 @@ export interface PatchUserRes {
 export const patchUser = (userId: string, body: PatchUserReq) =>
   api.patch<PatchUserRes>(`/users/${userId}`, body);
 
+// ── 5.11 更新通知狀態 ────────────────────────────────────────
+
+export interface PatchNotifyStatusReq {
+  notify_status: 'pending' | 'sent' | 'not_required' | 'failed';
+  updated_by: string;
+}
+
+export interface PatchNotifyStatusRes {
+  message: string;
+  data: { event_id: string; notify_status: string; updated_by: string; updated_at: string };
+}
+
+export const patchNotifyStatus = (eventId: string, body: PatchNotifyStatusReq) =>
+  api.patch<PatchNotifyStatusRes>(`/scan-events/${eventId}/notify-status`, body);
+
 // ── 5.9 家庭圈近況 Feed ──────────────────────────────────────
 
 export interface FamilyFeedMember {
